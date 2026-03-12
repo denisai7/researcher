@@ -102,3 +102,7 @@ class NotebookLMAdapter:
     async def delete_project(self, notebook_id: str) -> bool:
         """Delete a NotebookLM notebook."""
         return await self.client.delete_notebook(notebook_id)
+
+    async def close(self):
+        """Close the underlying NotebookLM client session."""
+        await self.client.close()

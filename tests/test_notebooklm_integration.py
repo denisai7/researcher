@@ -535,25 +535,24 @@ class TestResultDelivery:
         os.write(fd, b"fake audio data")
         os.close(fd)
 
-        try:
-            orchestrator = MagicMock()
-            orchestrator.process_project = AsyncMock(
-                return_value=ResearchResult(
-                    result_type="audio_overview",
-                    file_path=tmp_path,
-                    file_name="audio_overview.mp3",
-                    notebooklm_ref="nb-1",
-                )
+        orchestrator = MagicMock()
+        orchestrator.process_project = AsyncMock(
+            return_value=ResearchResult(
+                result_type="audio_overview",
+                file_path=tmp_path,
+                file_name="audio_overview.mp3",
+                notebooklm_ref="nb-1",
             )
+        )
 
-            await _process_and_deliver(
-                orchestrator, self.project, self.message, AsyncMock()
-            )
+        await _process_and_deliver(
+            orchestrator, self.project, self.message, AsyncMock()
+        )
 
-            self.message.reply_audio.assert_awaited_once()
-            self.message.reply_document.assert_not_awaited()
-        finally:
-            os.unlink(tmp_path)
+        self.message.reply_audio.assert_awaited_once()
+        self.message.reply_document.assert_not_awaited()
+        # File should be cleaned up automatically
+        assert not os.path.exists(tmp_path)
 
     @pytest.mark.asyncio
     async def test_non_audio_file_uses_reply_document(self):
@@ -564,25 +563,24 @@ class TestResultDelivery:
         os.write(fd, b"fake pdf data")
         os.close(fd)
 
-        try:
-            orchestrator = MagicMock()
-            orchestrator.process_project = AsyncMock(
-                return_value=ResearchResult(
-                    result_type="study_guide",
-                    file_path=tmp_path,
-                    file_name="guide.pdf",
-                    notebooklm_ref="nb-1",
-                )
+        orchestrator = MagicMock()
+        orchestrator.process_project = AsyncMock(
+            return_value=ResearchResult(
+                result_type="study_guide",
+                file_path=tmp_path,
+                file_name="guide.pdf",
+                notebooklm_ref="nb-1",
             )
+        )
 
-            await _process_and_deliver(
-                orchestrator, self.project, self.message, AsyncMock()
-            )
+        await _process_and_deliver(
+            orchestrator, self.project, self.message, AsyncMock()
+        )
 
-            self.message.reply_document.assert_awaited_once()
-            self.message.reply_audio.assert_not_awaited()
-        finally:
-            os.unlink(tmp_path)
+        self.message.reply_document.assert_awaited_once()
+        self.message.reply_audio.assert_not_awaited()
+        # File should be cleaned up automatically
+        assert not os.path.exists(tmp_path)
 
     @pytest.mark.asyncio
     async def test_failed_result_sends_error_message(self):
@@ -687,3 +685,299 @@ class TestResultDelivery:
                     break
         assert saved_summary is not None
         assert len(saved_summary) == 1000
+
+    @pytest.mark.asyncio
+    async def test_audio_file_cleaned_up_after_delivery(self):
+        """Temp audio file should be cleaned up after sending to Telegram."""
+        from src.telegram.handlers.new_task import _process_and_deliver
+        import tempfile, os
+
+        fd, tmp_path = tempfile.mkstemp(suffix=".mp3")
+        os.write(fd, b"fake audio data")
+        os.close(fd)
+
+        orchestrator = MagicMock()
+        orchestrator.process_project = AsyncMock(
+            return_value=ResearchResult(
+                result_type="audio_overview",
+                file_path=tmp_path,
+                file_name="audio_overview.mp3",
+                notebooklm_ref="nb-1",
+            )
+        )
+
+        await _process_and_deliver(
+            orchestrator, self.project, self.message, AsyncMock()
+        )
+
+        self.message.reply_audio.assert_awaited_once()
+        # File should be cleaned up
+        assert not os.path.exists(tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_file_cleaned_up_even_on_send_failure(self):
+        """Temp file should be cleaned up even if Telegram send fails."""
+        from src.telegram.handlers.new_task import _process_and_deliver
+        import tempfile, os
+
+        fd, tmp_path = tempfile.mkstemp(suffix=".mp3")
+        os.write(fd, b"fake audio data")
+        os.close(fd)
+
+        self.message.reply_audio = AsyncMock(side_effect=Exception("send failed"))
+
+        orchestrator = MagicMock()
+        orchestrator.process_project = AsyncMock(
+            return_value=ResearchResult(
+                result_type="audio_overview",
+                file_path=tmp_path,
+                file_name="audio_overview.mp3",
+                notebooklm_ref="nb-1",
+            )
+        )
+
+        await _process_and_deliver(
+            orchestrator, self.project, self.message, AsyncMock()
+        )
+
+        # File should still be cleaned up despite send failure
+        assert not os.path.exists(tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_text_and_file_result_sends_both(self):
+        """When result has both content and file, both should be delivered."""
+        from src.telegram.handlers.new_task import _process_and_deliver
+        import tempfile, os
+
+        fd, tmp_path = tempfile.mkstemp(suffix=".mp3")
+        os.write(fd, b"fake audio data")
+        os.close(fd)
+
+        try:
+            orchestrator = MagicMock()
+            orchestrator.process_project = AsyncMock(
+                return_value=ResearchResult(
+                    result_type="audio_overview",
+                    content="Here's a transcript of the audio.",
+                    file_path=tmp_path,
+                    file_name="audio_overview.mp3",
+                    notebooklm_ref="nb-1",
+                )
+            )
+
+            await _process_and_deliver(
+                orchestrator, self.project, self.message, AsyncMock()
+            )
+
+            # Text content should be sent
+            text_calls = [
+                c for c in self.message.reply_text.call_args_list
+                if "transcript" in str(c)
+            ]
+            assert len(text_calls) == 1
+            # Audio file should also be sent
+            self.message.reply_audio.assert_awaited_once()
+        finally:
+            # cleanup_file may have already removed it
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Mixed material types in single pipeline
+# ---------------------------------------------------------------------------
+
+class TestMixedMaterialPipeline:
+    """Test processing projects with multiple material types."""
+
+    def setup_method(self):
+        from src.models.project import ProjectStatus, ResearchProject
+        from src.workers.tasks import ResearchTaskProcessor
+
+        self.project = ResearchProject(
+            project_id="p1",
+            user_id="u1",
+            project_name="Mixed Research",
+            original_user_request="summarize these materials",
+            status=ProjectStatus.NEW,
+        )
+
+        self.pm = MagicMock()
+        self.pm.update_status = MagicMock()
+        self.pm.update_material_status = MagicMock()
+        self.pm.update_result = MagicMock()
+        self.pm.project_repo = MagicMock()
+
+        self.adapter = MagicMock()
+        self.adapter.is_available = True
+        self.adapter.create_project = AsyncMock(return_value="nb-mixed")
+        self.adapter.upload_material = AsyncMock(return_value=True)
+        self.adapter.generate_result = AsyncMock(
+            return_value=ResearchResult(
+                result_type="summary",
+                content="Combined summary",
+                notebooklm_ref="nb-mixed",
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_pdf_and_youtube_and_link(self):
+        """Pipeline handles a mix of PDF, YouTube URL, and web link."""
+        self.pm.get_materials.return_value = [
+            ResearchMaterial(
+                material_id="m1", project_id="p1",
+                material_type=MaterialType.PDF,
+                source_value="/tmp/paper.pdf", display_name="paper.pdf",
+            ),
+            ResearchMaterial(
+                material_id="m2", project_id="p1",
+                material_type=MaterialType.YOUTUBE,
+                source_value="https://youtube.com/watch?v=abc",
+                display_name="https://youtube.com/watch?v=abc",
+            ),
+            ResearchMaterial(
+                material_id="m3", project_id="p1",
+                material_type=MaterialType.LINK,
+                source_value="https://example.com/article",
+                display_name="https://example.com/article",
+            ),
+        ]
+
+        from src.workers.tasks import ResearchTaskProcessor
+        processor = ResearchTaskProcessor(
+            project_manager=self.pm, adapter=self.adapter
+        )
+
+        result = await processor.process_project(self.project)
+        assert result is not None
+        assert result.content == "Combined summary"
+        assert self.adapter.upload_material.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_partial_upload_failure_still_generates(self):
+        """If one material fails upload, others proceed and result is generated."""
+        self.pm.get_materials.return_value = [
+            ResearchMaterial(
+                material_id="m1", project_id="p1",
+                material_type=MaterialType.PDF,
+                source_value="/tmp/good.pdf", display_name="good.pdf",
+            ),
+            ResearchMaterial(
+                material_id="m2", project_id="p1",
+                material_type=MaterialType.IMAGE,
+                source_value="/tmp/bad.jpg", display_name="bad.jpg",
+            ),
+        ]
+
+        async def upload_side_effect(notebook_id, material):
+            if material.display_name == "bad.jpg":
+                raise Exception("Upload timeout")
+            return True
+
+        self.adapter.upload_material = AsyncMock(side_effect=upload_side_effect)
+
+        from src.workers.tasks import ResearchTaskProcessor
+        processor = ResearchTaskProcessor(
+            project_manager=self.pm, adapter=self.adapter
+        )
+
+        from unittest.mock import patch
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await processor.process_project(self.project)
+
+        assert result is not None
+        assert "upload_errors" in result.metadata
+        assert any("bad.jpg" in e for e in result.metadata["upload_errors"])
+        # Good material should be marked as used
+        self.pm.update_material_status.assert_any_call(
+            "m1", MaterialStatus.USED_IN_RESULT
+        )
+
+
+# ---------------------------------------------------------------------------
+# Full 5-status flow test (NEW from handler + 4 from processor)
+# ---------------------------------------------------------------------------
+
+class TestFull5StatusFlow:
+    """Verify all 5 status stages are shown during a complete request."""
+
+    @pytest.mark.asyncio
+    async def test_all_five_statuses_sent_to_telegram(self):
+        """NEW is sent by handler, then 4 more by processor = 5 total."""
+        from src.models.project import ProjectStatus, ResearchProject
+        from src.core.statuses import format_status_message
+
+        all_status_messages = []
+
+        message = MagicMock()
+        async def track_reply(text, **kwargs):
+            all_status_messages.append(text)
+        message.reply_text = AsyncMock(side_effect=track_reply)
+
+        project = ResearchProject(
+            project_id="p1",
+            user_id="u1",
+            project_name="Test",
+            original_user_request="summarize this",
+            status=ProjectStatus.NEW,
+        )
+
+        # Simulate what handle_message sends for status 1
+        all_status_messages.append(
+            format_status_message(ProjectStatus.NEW, project.project_name)
+        )
+
+        # Status callback matching the signature used in new_task.py
+        async def status_callback(project_id, status, project_name):
+            all_status_messages.append(
+                format_status_message(status, project_name)
+            )
+
+        # Simulate processor status callbacks (statuses 2-5)
+        async def mock_process(proj, callback):
+            for status in [
+                ProjectStatus.MATERIALS_PREPARING,
+                ProjectStatus.SENT_TO_NOTEBOOKLM,
+                ProjectStatus.GENERATING,
+                ProjectStatus.COMPLETED,
+            ]:
+                await callback(proj.project_id, status, proj.project_name)
+            return ResearchResult(
+                result_type="summary",
+                content="Result text",
+                notebooklm_ref="nb-1",
+            )
+
+        orchestrator = MagicMock()
+        orchestrator.process_project = AsyncMock(side_effect=mock_process)
+
+        from src.telegram.handlers.new_task import _process_and_deliver
+        await _process_and_deliver(
+            orchestrator, project, message, status_callback
+        )
+
+        # Verify all 5 statuses are present
+        status_msgs = [m for m in all_status_messages if "/5]" in m]
+        assert len(status_msgs) == 5
+        assert "[1/5]" in status_msgs[0]
+        assert "[2/5]" in status_msgs[1]
+        assert "[3/5]" in status_msgs[2]
+        assert "[4/5]" in status_msgs[3]
+        assert "[5/5]" in status_msgs[4]
+
+
+# ---------------------------------------------------------------------------
+# Adapter close
+# ---------------------------------------------------------------------------
+
+class TestAdapterClose:
+    @pytest.mark.asyncio
+    async def test_adapter_close_delegates_to_client(self):
+        from src.integrations.notebooklm.adapter import NotebookLMAdapter
+
+        adapter = NotebookLMAdapter()
+        adapter.client = MagicMock()
+        adapter.client.close = AsyncMock()
+
+        await adapter.close()
+        adapter.client.close.assert_awaited_once()
