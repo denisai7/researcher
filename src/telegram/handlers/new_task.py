@@ -11,7 +11,7 @@ from src.core.statuses import format_status_message
 from src.models.material import MaterialType
 from src.models.project import ProjectStatus
 from src.utils.converters import detect_material_type_from_extension
-from src.utils.files import download_telegram_file
+from src.utils.files import FileSizeError, check_telegram_file_size, download_telegram_file
 from src.utils.logging import logger
 
 
@@ -28,76 +28,110 @@ async def handle_message(
     user_id = str(update.effective_user.id)
     text = message.text or message.caption or ""
     materials = []
+    size_errors = []
 
     # Process attached document
     if message.document:
         doc = message.document
         file_name = doc.file_name or f"file_{doc.file_id}"
-        local_path = await download_telegram_file(
-            context.bot, doc.file_id, file_name
-        )
-        mat_type = detect_material_type_from_extension(file_name)
-        materials.append(
-            {"type": mat_type, "source": local_path, "name": file_name}
-        )
+        try:
+            check_telegram_file_size(doc.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, doc.file_id, file_name
+            )
+            mat_type = detect_material_type_from_extension(file_name)
+            materials.append(
+                {"type": mat_type, "source": local_path, "name": file_name}
+            )
+        except FileSizeError as e:
+            size_errors.append(str(e))
 
     # Process photo
     if message.photo:
         photo = message.photo[-1]  # largest size
         file_name = f"photo_{photo.file_id}.jpg"
-        local_path = await download_telegram_file(
-            context.bot, photo.file_id, file_name
-        )
-        materials.append(
-            {"type": MaterialType.IMAGE, "source": local_path, "name": file_name}
-        )
+        try:
+            check_telegram_file_size(photo.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, photo.file_id, file_name
+            )
+            materials.append(
+                {"type": MaterialType.IMAGE, "source": local_path, "name": file_name}
+            )
+        except FileSizeError as e:
+            size_errors.append(str(e))
 
     # Process audio
     if message.audio:
         audio = message.audio
         file_name = audio.file_name or f"audio_{audio.file_id}.mp3"
-        local_path = await download_telegram_file(
-            context.bot, audio.file_id, file_name
-        )
-        materials.append(
-            {"type": MaterialType.AUDIO, "source": local_path, "name": file_name}
-        )
+        try:
+            check_telegram_file_size(audio.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, audio.file_id, file_name
+            )
+            materials.append(
+                {"type": MaterialType.AUDIO, "source": local_path, "name": file_name}
+            )
+        except FileSizeError as e:
+            size_errors.append(str(e))
 
     # Process voice
     if message.voice:
         voice = message.voice
         file_name = f"voice_{voice.file_id}.ogg"
-        local_path = await download_telegram_file(
-            context.bot, voice.file_id, file_name
-        )
-        materials.append(
-            {"type": MaterialType.AUDIO, "source": local_path, "name": file_name}
-        )
+        try:
+            check_telegram_file_size(voice.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, voice.file_id, file_name
+            )
+            materials.append(
+                {"type": MaterialType.AUDIO, "source": local_path, "name": file_name}
+            )
+        except FileSizeError as e:
+            size_errors.append(str(e))
 
     # Process video
     if message.video:
         video = message.video
         file_name = video.file_name or f"video_{video.file_id}.mp4"
-        local_path = await download_telegram_file(
-            context.bot, video.file_id, file_name
-        )
-        materials.append(
-            {"type": MaterialType.VIDEO, "source": local_path, "name": file_name}
-        )
+        try:
+            check_telegram_file_size(video.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, video.file_id, file_name
+            )
+            materials.append(
+                {"type": MaterialType.VIDEO, "source": local_path, "name": file_name}
+            )
+        except FileSizeError as e:
+            size_errors.append(str(e))
 
     # Process video note
     if message.video_note:
         vn = message.video_note
         file_name = f"videonote_{vn.file_id}.mp4"
-        local_path = await download_telegram_file(
-            context.bot, vn.file_id, file_name
-        )
-        materials.append(
-            {"type": MaterialType.VIDEO, "source": local_path, "name": file_name}
-        )
+        try:
+            check_telegram_file_size(vn.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, vn.file_id, file_name
+            )
+            materials.append(
+                {"type": MaterialType.VIDEO, "source": local_path, "name": file_name}
+            )
+        except FileSizeError as e:
+            size_errors.append(str(e))
 
-    if not text and not materials:
+    if not text and not materials and not size_errors:
         return
+
+    # Report file size errors immediately
+    if size_errors:
+        error_msg = "Some files could not be processed:\n" + "\n".join(
+            f"- {err}" for err in size_errors
+        )
+        await message.reply_text(error_msg)
+        if not text and not materials:
+            return
 
     project, is_new = orchestrator.handle_new_message(user_id, text, materials)
 

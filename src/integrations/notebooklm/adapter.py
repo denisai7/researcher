@@ -18,6 +18,8 @@ INTENT_MAP = {
     "summarise": "summary",
     "review": "summary",
     "overview": "summary",
+    "brief": "summary",
+    "briefing": "summary",
     "study": "study_guide",
     "guide": "study_guide",
 }
@@ -56,6 +58,8 @@ class NotebookLMAdapter:
         elif material.material_type in (
             MaterialType.PDF,
             MaterialType.AUDIO,
+            MaterialType.IMAGE,
+            MaterialType.VIDEO,
             MaterialType.FILE,
         ):
             return await self.client.add_source_file(
@@ -88,7 +92,7 @@ class NotebookLMAdapter:
                 notebooklm_ref=notebook_id,
             )
         else:
-            text = await self.client.get_summary(notebook_id)
+            text = await self.client.generate_summary(notebook_id)
             return ResearchResult(
                 result_type="summary",
                 content=text,

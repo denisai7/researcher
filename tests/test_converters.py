@@ -86,6 +86,6 @@ class TestFormatSupport:
         assert is_format_supported(MaterialType.YOUTUBE)
         assert is_format_supported(MaterialType.AUDIO)
 
-    def test_unsupported(self):
-        assert not is_format_supported(MaterialType.IMAGE)
-        assert not is_format_supported(MaterialType.VIDEO)
+    def test_image_and_video_supported(self):
+        assert is_format_supported(MaterialType.IMAGE)
+        assert is_format_supported(MaterialType.VIDEO)
