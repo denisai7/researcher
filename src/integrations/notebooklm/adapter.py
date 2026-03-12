@@ -40,6 +40,7 @@ class NotebookLMAdapter:
 
     @property
     def is_available(self) -> bool:
+        """Check if the notebooklm library is importable."""
         return self.client.is_available
 
     async def create_project(self, name: str) -> Optional[str]:
@@ -71,17 +72,18 @@ class NotebookLMAdapter:
     ) -> Optional[ResearchResult]:
         """Generate a result based on the detected action."""
         if action == "audio_overview":
-            audio_ref = await self.client.generate_audio_overview(notebook_id)
+            audio_path = await self.client.generate_audio_overview(notebook_id)
             return ResearchResult(
                 result_type="audio_overview",
                 content=None,
-                notebooklm_ref=audio_ref,
-                file_path=audio_ref if audio_ref and not audio_ref.startswith("http") else None,
+                notebooklm_ref=notebook_id,
+                file_path=audio_path,
+                file_name="audio_overview.mp3",
             )
-        elif action in ("summary", "study_guide"):
-            text = await self.client.get_summary(notebook_id)
+        elif action == "study_guide":
+            text = await self.client.generate_study_guide(notebook_id)
             return ResearchResult(
-                result_type=action,
+                result_type="study_guide",
                 content=text,
                 notebooklm_ref=notebook_id,
             )

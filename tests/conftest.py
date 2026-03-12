@@ -13,5 +13,7 @@ telegram_mock = MagicMock()
 sys.modules["telegram"] = telegram_mock
 sys.modules["telegram.ext"] = MagicMock()
 
-# Mock notebooklm
-sys.modules["notebooklm"] = MagicMock()
+# Mock notebooklm and its submodules
+notebooklm_mock = MagicMock()
+sys.modules["notebooklm"] = notebooklm_mock
+sys.modules["notebooklm.auth"] = MagicMock()
