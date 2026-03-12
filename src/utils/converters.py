@@ -38,6 +38,8 @@ SUPPORTED_NOTEBOOKLM_TYPES = {
     MaterialType.YOUTUBE,
     MaterialType.PDF,
     MaterialType.AUDIO,
+    MaterialType.IMAGE,
+    MaterialType.VIDEO,
     MaterialType.FILE,
 }
 
@@ -81,10 +83,38 @@ def is_format_supported(material_type: MaterialType) -> bool:
     return material_type in SUPPORTED_NOTEBOOKLM_TYPES
 
 
-def suggest_conversion(material_type: MaterialType) -> Optional[str]:
-    """Suggest a conversion strategy for unsupported types."""
-    if material_type == MaterialType.IMAGE:
-        return "Images are not directly supported. Consider using OCR or describing the image content."
-    if material_type == MaterialType.VIDEO:
-        return "Video files may need audio extraction before processing."
-    return None
+UNSUPPORTED_EXTENSION_HINTS: dict[str, str] = {
+    ".doc": "Convert to PDF first (e.g., LibreOffice: soffice --convert-to pdf)",
+    ".docx": "Convert to PDF first (e.g., LibreOffice: soffice --convert-to pdf)",
+    ".ppt": "Convert to PDF first (e.g., LibreOffice: soffice --convert-to pdf)",
+    ".pptx": "Convert to PDF first (e.g., LibreOffice: soffice --convert-to pdf)",
+    ".xls": "Convert to PDF first (e.g., LibreOffice: soffice --convert-to pdf)",
+    ".xlsx": "Convert to PDF first (e.g., LibreOffice: soffice --convert-to pdf)",
+    ".txt": "Rename to .pdf or paste the text directly in the chat",
+    ".rtf": "Convert to PDF first",
+    ".epub": "Convert to PDF first (e.g., Calibre)",
+    ".heic": "Convert to JPEG first",
+    ".tiff": "Convert to PNG or JPEG first",
+    ".tif": "Convert to PNG or JPEG first",
+}
+
+
+def suggest_conversion(material_type: MaterialType, filename: str = "") -> Optional[str]:
+    """Suggest a conversion strategy for unsupported or problematic file types.
+
+    Returns a hint string if the file should be converted before upload,
+    or None if the format is natively supported.
+    """
+    # Check specific extension hints first -- some extensions map to FILE type
+    # but aren't actually supported by NotebookLM natively
+    if filename:
+        from src.utils.files import get_file_extension
+
+        ext = get_file_extension(filename)
+        if ext in UNSUPPORTED_EXTENSION_HINTS:
+            return UNSUPPORTED_EXTENSION_HINTS[ext]
+
+    if material_type in SUPPORTED_NOTEBOOKLM_TYPES:
+        return None
+
+    return "This file format is not supported. Try converting to PDF, MP3, or a supported format."

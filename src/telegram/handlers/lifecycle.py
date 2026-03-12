@@ -11,7 +11,7 @@ from src.integrations.notebooklm.adapter import NotebookLMAdapter
 from src.models.material import MaterialType
 from src.models.project import ProjectStatus
 from src.utils.converters import detect_material_type_from_extension
-from src.utils.files import download_telegram_file
+from src.utils.files import FileSizeError, check_telegram_file_size, download_telegram_file
 from src.utils.logging import logger
 
 # Callback data prefixes
@@ -230,42 +230,106 @@ async def handle_add_to_project(
         return
 
     added = 0
+    size_errors = []
 
     if message.document:
         doc = message.document
         file_name = doc.file_name or f"file_{doc.file_id}"
-        local_path = await download_telegram_file(
-            context.bot, doc.file_id, file_name
-        )
-        mat_type = detect_material_type_from_extension(file_name)
-        manager.add_material(project.project_id, mat_type, local_path, file_name)
-        added += 1
+        try:
+            check_telegram_file_size(doc.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, doc.file_id, file_name
+            )
+            mat_type = detect_material_type_from_extension(file_name)
+            manager.add_material(project.project_id, mat_type, local_path, file_name)
+            added += 1
+        except FileSizeError as e:
+            size_errors.append(str(e))
 
     if message.photo:
         photo = message.photo[-1]
         file_name = f"photo_{photo.file_id}.jpg"
-        local_path = await download_telegram_file(
-            context.bot, photo.file_id, file_name
-        )
-        manager.add_material(
-            project.project_id, MaterialType.IMAGE, local_path, file_name
-        )
-        added += 1
+        try:
+            check_telegram_file_size(photo.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, photo.file_id, file_name
+            )
+            manager.add_material(
+                project.project_id, MaterialType.IMAGE, local_path, file_name
+            )
+            added += 1
+        except FileSizeError as e:
+            size_errors.append(str(e))
 
     if message.audio:
         audio = message.audio
         file_name = audio.file_name or f"audio_{audio.file_id}.mp3"
-        local_path = await download_telegram_file(
-            context.bot, audio.file_id, file_name
-        )
-        manager.add_material(
-            project.project_id, MaterialType.AUDIO, local_path, file_name
-        )
-        added += 1
+        try:
+            check_telegram_file_size(audio.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, audio.file_id, file_name
+            )
+            manager.add_material(
+                project.project_id, MaterialType.AUDIO, local_path, file_name
+            )
+            added += 1
+        except FileSizeError as e:
+            size_errors.append(str(e))
 
+    if message.voice:
+        voice = message.voice
+        file_name = f"voice_{voice.file_id}.ogg"
+        try:
+            check_telegram_file_size(voice.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, voice.file_id, file_name
+            )
+            manager.add_material(
+                project.project_id, MaterialType.AUDIO, local_path, file_name
+            )
+            added += 1
+        except FileSizeError as e:
+            size_errors.append(str(e))
+
+    if message.video:
+        video = message.video
+        file_name = video.file_name or f"video_{video.file_id}.mp4"
+        try:
+            check_telegram_file_size(video.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, video.file_id, file_name
+            )
+            manager.add_material(
+                project.project_id, MaterialType.VIDEO, local_path, file_name
+            )
+            added += 1
+        except FileSizeError as e:
+            size_errors.append(str(e))
+
+    if message.video_note:
+        vn = message.video_note
+        file_name = f"videonote_{vn.file_id}.mp4"
+        try:
+            check_telegram_file_size(vn.file_size, file_name)
+            local_path = await download_telegram_file(
+                context.bot, vn.file_id, file_name
+            )
+            manager.add_material(
+                project.project_id, MaterialType.VIDEO, local_path, file_name
+            )
+            added += 1
+        except FileSizeError as e:
+            size_errors.append(str(e))
+
+    parts = []
     if added > 0:
-        await message.reply_text(
-            f"Added {added} material(s) to project '{project.project_name}'."
+        parts.append(f"Added {added} material(s) to project '{project.project_name}'.")
+    if size_errors:
+        parts.append(
+            "Some files could not be added:\n"
+            + "\n".join(f"- {err}" for err in size_errors)
         )
+    if parts:
+        await message.reply_text("\n\n".join(parts))
     else:
         await message.reply_text("No files found in your message to add.")

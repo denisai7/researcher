@@ -117,7 +117,23 @@ class ProjectManager:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
     ) -> list[ResearchProject]:
-        results = self.project_repo.search(user_id, query, status, date_from, date_to)
+        # Try full-text search first, fall back to ilike
+        results = []
+        if query:
+            try:
+                results = self.project_repo.fulltext_search(
+                    user_id, query, status, date_from, date_to
+                )
+            except Exception:
+                logger.debug("Full-text search failed, falling back to ilike")
+                results = []
+
+        if not results:
+            results = self.project_repo.search(
+                user_id, query, status, date_from, date_to
+            )
+
+        # Also search material names/sources
         if query:
             material_results = self.project_repo.search_by_material(user_id, query)
             seen = {p.project_id for p in results}

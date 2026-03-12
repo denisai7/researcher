@@ -10,6 +10,7 @@ from src.models.material import MaterialStatus, MaterialType, ResearchMaterial
 from src.models.project import ProjectStatus, ResearchProject
 from src.models.result import ResearchResult
 from src.utils.converters import is_format_supported, suggest_conversion
+from src.utils.files import FileSizeError, check_notebooklm_file_size
 from src.utils.logging import logger
 from src.workers.retries import retry_with_backoff
 
@@ -71,7 +72,9 @@ class ResearchTaskProcessor:
             upload_errors = []
             for material in materials:
                 if not is_format_supported(material.material_type):
-                    hint = suggest_conversion(material.material_type)
+                    hint = suggest_conversion(
+                        material.material_type, material.display_name
+                    )
                     upload_errors.append(
                         f"{material.display_name}: unsupported format. {hint or ''}"
                     )
@@ -79,6 +82,22 @@ class ResearchTaskProcessor:
                         material.material_id, MaterialStatus.ERROR
                     )
                     continue
+
+                # Check file size before uploading to NotebookLM
+                if material.material_type not in (
+                    MaterialType.LINK,
+                    MaterialType.YOUTUBE,
+                ):
+                    try:
+                        check_notebooklm_file_size(material.source_value)
+                    except FileSizeError as e:
+                        upload_errors.append(str(e))
+                        self.project_manager.update_material_status(
+                            material.material_id, MaterialStatus.ERROR
+                        )
+                        continue
+                    except OSError:
+                        pass  # File may be a reference or not yet on disk
 
                 self.project_manager.update_material_status(
                     material.material_id, MaterialStatus.UPLOADING

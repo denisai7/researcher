@@ -129,6 +129,32 @@ class ProjectRepository:
         result = q.order("created_at", desc=True).limit(20).execute()
         return [ResearchProject.from_db_row(row) for row in result.data]
 
+    def fulltext_search(
+        self,
+        user_id: str,
+        query: str,
+        status: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> list[ResearchProject]:
+        """Search using PostgreSQL full-text search on the tsvector column."""
+        tsquery = " & ".join(query.strip().split())
+        q = (
+            self.client.table(self.TABLE)
+            .select("*")
+            .eq("user_id", user_id)
+            .text_search("search_vector", tsquery)
+        )
+        if status:
+            q = q.eq("status", status)
+        if date_from:
+            q = q.gte("created_at", date_from)
+        if date_to:
+            q = q.lte("created_at", date_to)
+
+        result = q.order("created_at", desc=True).limit(20).execute()
+        return [ResearchProject.from_db_row(row) for row in result.data]
+
     def search_by_material(self, user_id: str, query: str) -> list[ResearchProject]:
         """Search projects by their material names/sources."""
         mat_result = (
