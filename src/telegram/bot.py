@@ -16,6 +16,7 @@ from telegram.ext import (
 from src.core.orchestration import ResearchOrchestrator
 from src.core.projects import ProjectManager
 from src.integrations.notebooklm.adapter import NotebookLMAdapter
+from src.models.project import ProjectStatus
 from src.telegram.handlers import lifecycle, new_task, search
 from src.utils.logging import logger
 
@@ -142,8 +143,10 @@ class ResearcherBot:
                 # Treat as follow-up: update request and re-process
                 self.project_manager.project_repo.update(
                     context_project.project_id,
-                    {"original_user_request": text},
+                    {"original_user_request": text, "status": ProjectStatus.NEW.value},
                 )
+                context_project.original_user_request = text
+                context_project.status = ProjectStatus.NEW
                 await message.reply_text(
                     f"Follow-up on '{context_project.project_name}': processing..."
                 )
@@ -157,7 +160,9 @@ class ResearcherBot:
 
                 import asyncio
                 asyncio.create_task(
-                    self.orchestrator.process_project(context_project, status_cb)
+                    new_task._process_and_deliver(
+                        self.orchestrator, context_project, message, status_cb
+                    )
                 )
                 return
 

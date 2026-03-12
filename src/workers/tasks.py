@@ -9,7 +9,12 @@ from src.integrations.notebooklm.adapter import NotebookLMAdapter, detect_intent
 from src.models.material import MaterialStatus, MaterialType, ResearchMaterial
 from src.models.project import ProjectStatus, ResearchProject
 from src.models.result import ResearchResult
-from src.utils.converters import is_format_supported, suggest_conversion
+from src.utils.converters import (
+    auto_convert_file,
+    can_auto_convert,
+    is_format_supported,
+    suggest_conversion,
+)
 from src.utils.files import FileSizeError, check_notebooklm_file_size
 from src.utils.logging import logger
 from src.workers.retries import retry_with_backoff
@@ -72,16 +77,34 @@ class ResearchTaskProcessor:
             upload_errors = []
             for material in materials:
                 if not is_format_supported(material.material_type):
-                    hint = suggest_conversion(
-                        material.material_type, material.display_name
-                    )
-                    upload_errors.append(
-                        f"{material.display_name}: unsupported format. {hint or ''}"
-                    )
-                    self.project_manager.update_material_status(
-                        material.material_id, MaterialStatus.ERROR
-                    )
-                    continue
+                    # Try auto-conversion before giving up
+                    if can_auto_convert(material.display_name):
+                        converted = await auto_convert_file(material.source_value)
+                        if converted:
+                            material.source_value = converted
+                            material.material_type = MaterialType.PDF if converted.endswith(".pdf") else MaterialType.IMAGE
+                        else:
+                            hint = suggest_conversion(
+                                material.material_type, material.display_name
+                            )
+                            upload_errors.append(
+                                f"{material.display_name}: auto-conversion failed. {hint or ''}"
+                            )
+                            self.project_manager.update_material_status(
+                                material.material_id, MaterialStatus.ERROR
+                            )
+                            continue
+                    else:
+                        hint = suggest_conversion(
+                            material.material_type, material.display_name
+                        )
+                        upload_errors.append(
+                            f"{material.display_name}: unsupported format. {hint or ''}"
+                        )
+                        self.project_manager.update_material_status(
+                            material.material_id, MaterialStatus.ERROR
+                        )
+                        continue
 
                 # Check file size before uploading to NotebookLM
                 if material.material_type not in (
@@ -150,7 +173,7 @@ class ResearchTaskProcessor:
                 project_id,
                 result_type=result.result_type,
                 result_ref=result.notebooklm_ref,
-                result_summary=result.content[:500] if result.content else None,
+                result_summary=result.content[:1000] if result.content else None,
             )
             await notify(ProjectStatus.COMPLETED)
 

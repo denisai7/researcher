@@ -181,10 +181,16 @@ async def _process_and_deliver(orchestrator, project, message, status_callback):
         if result.is_file and result.file_path:
             try:
                 with open(result.file_path, "rb") as f:
-                    await message.reply_document(
-                        document=f,
-                        filename=result.file_name or "result",
-                    )
+                    if result.result_type == "audio_overview":
+                        await message.reply_audio(
+                            audio=f,
+                            title=result.file_name or "audio_overview.mp3",
+                        )
+                    else:
+                        await message.reply_document(
+                            document=f,
+                            filename=result.file_name or "result",
+                        )
             except Exception as e:
                 await message.reply_text(f"Result generated but failed to send file: {e}")
 

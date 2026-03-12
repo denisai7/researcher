@@ -253,6 +253,18 @@ class TestSearchProjects:
         results = manager.search_projects("user1", query="nonexistent")
         assert len(results) == 0
 
+    def test_search_by_result_summary_via_ilike(self):
+        """When fulltext fails, ilike search includes result_summary."""
+        proj = _make_project(name="AI Paper")
+        proj.result_summary = "Deep learning trends in computer vision"
+        manager, proj_repo, _ = _make_manager(projects=[proj])
+        proj_repo.fulltext_search.side_effect = Exception("FTS unavailable")
+        proj_repo.search_by_material.return_value = []
+
+        results = manager.search_projects("user1", query="computer vision")
+        proj_repo.search.assert_called_once()
+        assert len(results) == 1
+
 
 class TestFindByName:
     def test_find_existing_project(self):
@@ -566,6 +578,45 @@ class TestProjectView:
         reply_text = update.effective_message.reply_text.call_args[0][0]
         assert "No materials attached" in reply_text
 
+    @pytest.mark.asyncio
+    async def test_view_project_shows_result_info(self):
+        from src.telegram.handlers.lifecycle import handle_view_project
+
+        proj = _make_project(
+            name="Completed Research",
+            request="summarize AI trends",
+            status=ProjectStatus.COMPLETED,
+        )
+        proj.result_type = "summary"
+        proj.result_summary = "AI is transforming healthcare and education"
+
+        manager, _, _ = _make_manager(projects=[proj], materials=[])
+        update = _make_update("show project Completed Research")
+        context = MagicMock()
+
+        await handle_view_project(update, context, manager, "Completed Research")
+
+        reply_text = update.effective_message.reply_text.call_args[0][0]
+        assert "Result type: summary" in reply_text
+        assert "AI is transforming" in reply_text
+
+    @pytest.mark.asyncio
+    async def test_view_project_truncates_long_result_summary(self):
+        from src.telegram.handlers.lifecycle import handle_view_project
+
+        proj = _make_project(name="Long Result")
+        proj.result_type = "summary"
+        proj.result_summary = "x" * 300
+
+        manager, _, _ = _make_manager(projects=[proj], materials=[])
+        update = _make_update("show project Long Result")
+        context = MagicMock()
+
+        await handle_view_project(update, context, manager, "Long Result")
+
+        reply_text = update.effective_message.reply_text.call_args[0][0]
+        assert "..." in reply_text
+
 
 # ===========================================================================
 # 7. Project rename tests
@@ -646,6 +697,105 @@ class TestFulltextSearchRepository:
         mock_table.text_search.assert_called_once_with(
             "search_vector", "quantum & computing"
         )
+
+    def test_search_by_material_uses_fulltext(self):
+        """search_by_material tries full-text search on material search_vector first."""
+        from src.integrations.supabase.repositories import ProjectRepository
+
+        mock_client = MagicMock()
+        mock_mat_table = MagicMock()
+        mock_proj_table = MagicMock()
+
+        def table_selector(name):
+            if name == "research_materials":
+                return mock_mat_table
+            return mock_proj_table
+
+        mock_client.table.side_effect = table_selector
+
+        # Material table chain
+        mock_mat_table.select.return_value = mock_mat_table
+        mock_mat_table.text_search.return_value = mock_mat_table
+        mock_mat_table.execute.return_value = MagicMock(
+            data=[{"project_id": "proj-1"}, {"project_id": "proj-2"}]
+        )
+
+        # Project table chain
+        mock_proj_table.select.return_value = mock_proj_table
+        mock_proj_table.eq.return_value = mock_proj_table
+        mock_proj_table.in_.return_value = mock_proj_table
+        mock_proj_table.order.return_value = mock_proj_table
+        mock_proj_table.execute.return_value = MagicMock(data=[])
+
+        repo = ProjectRepository.__new__(ProjectRepository)
+        repo.client = mock_client
+
+        repo.search_by_material("user1", "research paper")
+
+        mock_mat_table.text_search.assert_called_once_with(
+            "search_vector", "research & paper"
+        )
+
+    def test_search_by_material_fallback_to_ilike(self):
+        """search_by_material falls back to ilike when fulltext fails."""
+        from src.integrations.supabase.repositories import ProjectRepository
+
+        mock_client = MagicMock()
+        mock_mat_table = MagicMock()
+        mock_proj_table = MagicMock()
+
+        call_count = [0]
+
+        def table_selector(name):
+            if name == "research_materials":
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    # First call: fulltext search chain that raises
+                    ft_mock = MagicMock()
+                    ft_mock.select.return_value = ft_mock
+                    ft_mock.text_search.side_effect = Exception("FTS unavailable")
+                    return ft_mock
+                else:
+                    # Second call: ilike fallback
+                    return mock_mat_table
+            return mock_proj_table
+
+        mock_client.table.side_effect = table_selector
+
+        # ilike fallback chain
+        mock_mat_table.select.return_value = mock_mat_table
+        mock_mat_table.or_.return_value = mock_mat_table
+        mock_mat_table.execute.return_value = MagicMock(data=[])
+
+        repo = ProjectRepository.__new__(ProjectRepository)
+        repo.client = mock_client
+
+        repo.search_by_material("user1", "test")
+
+        mock_mat_table.or_.assert_called_once()
+
+    def test_search_ilike_includes_result_summary(self):
+        """The ilike search query includes result_summary field."""
+        from src.integrations.supabase.repositories import ProjectRepository
+
+        mock_client = MagicMock()
+        mock_table = MagicMock()
+        mock_client.table.return_value = mock_table
+
+        mock_table.select.return_value = mock_table
+        mock_table.eq.return_value = mock_table
+        mock_table.or_.return_value = mock_table
+        mock_table.order.return_value = mock_table
+        mock_table.limit.return_value = mock_table
+        mock_table.execute.return_value = MagicMock(data=[])
+
+        repo = ProjectRepository.__new__(ProjectRepository)
+        repo.client = mock_client
+
+        repo.search("user1", query="quantum")
+
+        or_arg = mock_table.or_.call_args[0][0]
+        assert "result_summary.ilike" in or_arg
 
     def test_fulltext_search_with_filters(self):
         from src.integrations.supabase.repositories import ProjectRepository
