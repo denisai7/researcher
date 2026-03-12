@@ -117,7 +117,8 @@ class ProjectRepository:
         if query:
             q = q.or_(
                 f"project_name.ilike.%{query}%,"
-                f"original_user_request.ilike.%{query}%"
+                f"original_user_request.ilike.%{query}%,"
+                f"result_summary.ilike.%{query}%"
             )
         if status:
             q = q.eq("status", status)
@@ -156,16 +157,29 @@ class ProjectRepository:
         return [ResearchProject.from_db_row(row) for row in result.data]
 
     def search_by_material(self, user_id: str, query: str) -> list[ResearchProject]:
-        """Search projects by their material names/sources."""
-        mat_result = (
-            self.client.table(MaterialRepository.TABLE)
-            .select("project_id")
-            .or_(
-                f"display_name.ilike.%{query}%,"
-                f"source_value.ilike.%{query}%"
+        """Search projects by their material names/sources.
+
+        Tries full-text search on the material search_vector first,
+        falls back to ilike on display_name and source_value.
+        """
+        try:
+            tsquery = " & ".join(query.strip().split())
+            mat_result = (
+                self.client.table(MaterialRepository.TABLE)
+                .select("project_id")
+                .text_search("search_vector", tsquery)
+                .execute()
             )
-            .execute()
-        )
+        except Exception:
+            mat_result = (
+                self.client.table(MaterialRepository.TABLE)
+                .select("project_id")
+                .or_(
+                    f"display_name.ilike.%{query}%,"
+                    f"source_value.ilike.%{query}%"
+                )
+                .execute()
+            )
         project_ids = list({row["project_id"] for row in mat_result.data})
         if not project_ids:
             return []

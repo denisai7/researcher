@@ -10,7 +10,11 @@ from src.core.projects import ProjectManager
 from src.integrations.notebooklm.adapter import NotebookLMAdapter
 from src.models.material import MaterialType
 from src.models.project import ProjectStatus
-from src.utils.converters import detect_material_type_from_extension
+from src.utils.converters import (
+    classify_text_content,
+    detect_material_type_from_extension,
+    extract_urls,
+)
 from src.utils.files import FileSizeError, check_telegram_file_size, download_telegram_file
 from src.utils.logging import logger
 
@@ -196,7 +200,17 @@ async def handle_view_project(
     text = f"Project: {project.project_name}\n"
     text += f"Status: {project.status.value}\n"
     text += f"Created: {project.created_at.strftime('%Y-%m-%d %H:%M')}\n"
-    text += f"Request: {project.original_user_request}\n\n"
+    text += f"Request: {project.original_user_request}\n"
+
+    if project.result_type:
+        text += f"Result type: {project.result_type}\n"
+    if project.result_summary:
+        summary = project.result_summary[:200]
+        if len(project.result_summary) > 200:
+            summary += "..."
+        text += f"Result: {summary}\n"
+
+    text += "\n"
 
     if materials:
         text += f"Materials ({len(materials)}):\n"
@@ -320,6 +334,15 @@ async def handle_add_to_project(
             added += 1
         except FileSizeError as e:
             size_errors.append(str(e))
+
+    # Extract URLs from text (caption or text minus the "add to project" prefix)
+    raw_text = message.text or message.caption or ""
+    urls = extract_urls(raw_text)
+    for url in urls:
+        url_type = classify_text_content(url)
+        if url_type:
+            manager.add_material(project.project_id, url_type, url, url)
+            added += 1
 
     parts = []
     if added > 0:

@@ -403,18 +403,15 @@ class TestTaskProcessorPipeline:
             ),
         ]
 
-        call_count = 0
-
         async def upload_side_effect(notebook_id, material):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
+            if material.display_name == "bad.pdf":
                 raise Exception("Upload failed")
             return True
 
         self.adapter.upload_material = AsyncMock(side_effect=upload_side_effect)
 
-        result = await self.processor.process_project(self.project)
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await self.processor.process_project(self.project)
         assert result is not None
         assert "upload_errors" in result.metadata
         assert len(result.metadata["upload_errors"]) == 1
@@ -460,3 +457,233 @@ class TestResearchResult:
     def test_metadata_defaults_empty(self):
         r = ResearchResult(result_type="summary")
         assert r.metadata == {}
+
+
+# ---------------------------------------------------------------------------
+# Result delivery to Telegram
+# ---------------------------------------------------------------------------
+
+class TestResultDelivery:
+    """Test _process_and_deliver sends results correctly to Telegram."""
+
+    def setup_method(self):
+        from src.models.project import ProjectStatus, ResearchProject
+
+        self.project = ResearchProject(
+            project_id="p1",
+            user_id="u1",
+            project_name="Test Research",
+            original_user_request="summarize this",
+            status=ProjectStatus.NEW,
+        )
+        self.message = MagicMock()
+        self.message.reply_text = AsyncMock()
+        self.message.reply_document = AsyncMock()
+        self.message.reply_audio = AsyncMock()
+
+    @pytest.mark.asyncio
+    async def test_text_result_sent_as_message(self):
+        from src.telegram.handlers.new_task import _process_and_deliver
+
+        orchestrator = MagicMock()
+        orchestrator.process_project = AsyncMock(
+            return_value=ResearchResult(
+                result_type="summary",
+                content="This is a summary.",
+                notebooklm_ref="nb-1",
+            )
+        )
+
+        await _process_and_deliver(
+            orchestrator, self.project, self.message, AsyncMock()
+        )
+
+        self.message.reply_text.assert_any_call("This is a summary.")
+
+    @pytest.mark.asyncio
+    async def test_long_text_split_into_chunks(self):
+        from src.telegram.handlers.new_task import _process_and_deliver
+
+        long_content = "A" * 8200  # >4096 chars, needs splitting
+        orchestrator = MagicMock()
+        orchestrator.process_project = AsyncMock(
+            return_value=ResearchResult(
+                result_type="summary",
+                content=long_content,
+                notebooklm_ref="nb-1",
+            )
+        )
+
+        await _process_and_deliver(
+            orchestrator, self.project, self.message, AsyncMock()
+        )
+
+        # Should have sent at least 2 text chunks (floor(8200/4096) + 1 = 3)
+        text_calls = [
+            c for c in self.message.reply_text.call_args_list
+            if len(c.args) > 0 and len(c.args[0]) > 100
+        ]
+        assert len(text_calls) >= 2
+
+    @pytest.mark.asyncio
+    async def test_audio_result_uses_reply_audio(self):
+        from src.telegram.handlers.new_task import _process_and_deliver
+        import tempfile, os
+
+        # Create a real temp file so open() works
+        fd, tmp_path = tempfile.mkstemp(suffix=".mp3")
+        os.write(fd, b"fake audio data")
+        os.close(fd)
+
+        try:
+            orchestrator = MagicMock()
+            orchestrator.process_project = AsyncMock(
+                return_value=ResearchResult(
+                    result_type="audio_overview",
+                    file_path=tmp_path,
+                    file_name="audio_overview.mp3",
+                    notebooklm_ref="nb-1",
+                )
+            )
+
+            await _process_and_deliver(
+                orchestrator, self.project, self.message, AsyncMock()
+            )
+
+            self.message.reply_audio.assert_awaited_once()
+            self.message.reply_document.assert_not_awaited()
+        finally:
+            os.unlink(tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_non_audio_file_uses_reply_document(self):
+        from src.telegram.handlers.new_task import _process_and_deliver
+        import tempfile, os
+
+        fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+        os.write(fd, b"fake pdf data")
+        os.close(fd)
+
+        try:
+            orchestrator = MagicMock()
+            orchestrator.process_project = AsyncMock(
+                return_value=ResearchResult(
+                    result_type="study_guide",
+                    file_path=tmp_path,
+                    file_name="guide.pdf",
+                    notebooklm_ref="nb-1",
+                )
+            )
+
+            await _process_and_deliver(
+                orchestrator, self.project, self.message, AsyncMock()
+            )
+
+            self.message.reply_document.assert_awaited_once()
+            self.message.reply_audio.assert_not_awaited()
+        finally:
+            os.unlink(tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_failed_result_sends_error_message(self):
+        from src.telegram.handlers.new_task import _process_and_deliver
+
+        orchestrator = MagicMock()
+        orchestrator.process_project = AsyncMock(return_value=None)
+
+        await _process_and_deliver(
+            orchestrator, self.project, self.message, AsyncMock()
+        )
+
+        error_calls = [
+            c for c in self.message.reply_text.call_args_list
+            if "Failed to process" in str(c)
+        ]
+        assert len(error_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_upload_errors_reported_to_user(self):
+        from src.telegram.handlers.new_task import _process_and_deliver
+
+        orchestrator = MagicMock()
+        orchestrator.process_project = AsyncMock(
+            return_value=ResearchResult(
+                result_type="summary",
+                content="Summary text",
+                notebooklm_ref="nb-1",
+                metadata={"upload_errors": ["bad.pdf: upload failed"]},
+            )
+        )
+
+        await _process_and_deliver(
+            orchestrator, self.project, self.message, AsyncMock()
+        )
+
+        error_calls = [
+            c for c in self.message.reply_text.call_args_list
+            if "materials had issues" in str(c)
+        ]
+        assert len(error_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_file_send_failure_reports_error(self):
+        from src.telegram.handlers.new_task import _process_and_deliver
+
+        orchestrator = MagicMock()
+        orchestrator.process_project = AsyncMock(
+            return_value=ResearchResult(
+                result_type="audio_overview",
+                file_path="/nonexistent/path.mp3",
+                file_name="audio.mp3",
+                notebooklm_ref="nb-1",
+            )
+        )
+
+        await _process_and_deliver(
+            orchestrator, self.project, self.message, AsyncMock()
+        )
+
+        error_calls = [
+            c for c in self.message.reply_text.call_args_list
+            if "failed to send file" in str(c)
+        ]
+        assert len(error_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_result_summary_truncation_to_1000(self):
+        """Verify tasks.py sends up to 1000 chars of result_summary."""
+        from src.workers.tasks import ResearchTaskProcessor
+
+        long_content = "X" * 2000
+        pm = MagicMock()
+        pm.get_materials.return_value = []
+        pm.update_status = MagicMock()
+        pm.update_result = MagicMock()
+        pm.project_repo = MagicMock()
+
+        adapter = MagicMock()
+        adapter.is_available = True
+        adapter.create_project = AsyncMock(return_value="nb-1")
+        adapter.generate_result = AsyncMock(
+            return_value=ResearchResult(
+                result_type="summary",
+                content=long_content,
+                notebooklm_ref="nb-1",
+            )
+        )
+
+        processor = ResearchTaskProcessor(project_manager=pm, adapter=adapter)
+        result = await processor.process_project(self.project)
+
+        assert result is not None
+        pm.update_result.assert_called_once()
+        call_kwargs = pm.update_result.call_args
+        saved_summary = call_kwargs.kwargs.get("result_summary") or call_kwargs[1].get("result_summary")
+        if saved_summary is None:
+            # positional/keyword mix - check all args
+            for arg in call_kwargs.args:
+                if isinstance(arg, str) and len(arg) > 100:
+                    saved_summary = arg
+                    break
+        assert saved_summary is not None
+        assert len(saved_summary) == 1000

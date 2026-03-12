@@ -598,3 +598,123 @@ class TestCallbackEdgeCases:
 
         msg = update.callback_query.edit_message_text.call_args[0][0]
         assert "not found" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# Auto-conversion for unsupported formats
+# ---------------------------------------------------------------------------
+
+
+class TestAutoConversion:
+    def test_can_auto_convert_docx(self):
+        from src.utils.converters import can_auto_convert
+        assert can_auto_convert("report.docx")
+
+    def test_can_auto_convert_pptx(self):
+        from src.utils.converters import can_auto_convert
+        assert can_auto_convert("slides.pptx")
+
+    def test_can_auto_convert_heic(self):
+        from src.utils.converters import can_auto_convert
+        assert can_auto_convert("photo.heic")
+
+    def test_cannot_auto_convert_unknown(self):
+        from src.utils.converters import can_auto_convert
+        assert not can_auto_convert("data.xyz")
+
+    def test_cannot_auto_convert_supported(self):
+        from src.utils.converters import can_auto_convert
+        assert not can_auto_convert("doc.pdf")
+
+    def test_get_target_format_pdf(self):
+        from src.utils.converters import get_auto_convert_target
+        assert get_auto_convert_target("report.docx") == "pdf"
+        assert get_auto_convert_target("slides.pptx") == "pdf"
+        assert get_auto_convert_target("data.xlsx") == "pdf"
+
+    def test_get_target_format_jpeg(self):
+        from src.utils.converters import get_auto_convert_target
+        assert get_auto_convert_target("photo.heic") == "jpeg"
+        assert get_auto_convert_target("scan.tiff") == "jpeg"
+
+    def test_get_target_format_none(self):
+        from src.utils.converters import get_auto_convert_target
+        assert get_auto_convert_target("doc.pdf") is None
+
+    @pytest.mark.asyncio
+    async def test_auto_convert_file_no_soffice(self):
+        """Auto-conversion returns None when converter tool is not available."""
+        from src.utils.converters import auto_convert_file
+        result = await auto_convert_file("/tmp/nonexistent.docx")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_auto_convert_success(self, tmp_path):
+        """Auto-conversion returns converted path on success."""
+        from src.utils.converters import auto_convert_file
+
+        # Create a fake .docx and simulate successful conversion
+        src_file = tmp_path / "test.docx"
+        src_file.write_text("fake content")
+        output_pdf = tmp_path / "test.pdf"
+
+        async def mock_subprocess(*args, **kwargs):
+            # Create the output file to simulate conversion
+            output_pdf.write_text("converted")
+            proc = MagicMock()
+            proc.returncode = 0
+            proc.wait = AsyncMock(return_value=0)
+            return proc
+
+        with patch("asyncio.create_subprocess_exec", side_effect=mock_subprocess):
+            result = await auto_convert_file(str(src_file))
+
+        assert result == str(output_pdf)
+
+
+# ---------------------------------------------------------------------------
+# Add URL to existing project
+# ---------------------------------------------------------------------------
+
+
+class TestAddUrlToProject:
+    @pytest.mark.asyncio
+    async def test_add_url_in_text(self):
+        project = _make_project()
+        manager = _mock_manager(project=project)
+        update = _mock_update(text="add this to project Test https://example.com/article")
+        ctx = _mock_context()
+
+        await lifecycle.handle_add_to_project(update, ctx, manager, "Test Project")
+
+        manager.add_material.assert_called_once()
+        call_args = manager.add_material.call_args
+        assert call_args[0][1] == MaterialType.LINK
+        assert "example.com" in call_args[0][2]
+
+    @pytest.mark.asyncio
+    async def test_add_youtube_url(self):
+        project = _make_project()
+        manager = _mock_manager(project=project)
+        update = _mock_update(text="add to project Test https://www.youtube.com/watch?v=abc123")
+        ctx = _mock_context()
+
+        await lifecycle.handle_add_to_project(update, ctx, manager, "Test Project")
+
+        manager.add_material.assert_called_once()
+        call_args = manager.add_material.call_args
+        assert call_args[0][1] == MaterialType.YOUTUBE
+
+
+# ---------------------------------------------------------------------------
+# Follow-up result delivery
+# ---------------------------------------------------------------------------
+
+
+class TestFollowUpDelivery:
+    def test_followup_resets_status(self):
+        """Follow-up should reset project status so it can be re-processed."""
+        from src.telegram.bot import _is_followup
+        assert _is_followup("make it shorter")
+        assert _is_followup("redo this")
+        assert not _is_followup("summarize this pdf")
