@@ -11,7 +11,7 @@ from src.core.statuses import format_status_message
 from src.models.material import MaterialType
 from src.models.project import ProjectStatus
 from src.utils.converters import detect_material_type_from_extension
-from src.utils.files import FileSizeError, check_telegram_file_size, download_telegram_file
+from src.utils.files import FileSizeError, check_telegram_file_size, cleanup_file, download_telegram_file
 from src.utils.logging import logger
 
 
@@ -169,16 +169,16 @@ async def _process_and_deliver(orchestrator, project, message, status_callback):
             )
             return
 
-        # Deliver results
-        if result.is_text and result.content:
-            # Split long messages
+        # Deliver text content (sent even when file is also present)
+        if result.content:
             content = result.content
             while content:
                 chunk = content[:4096]
                 await message.reply_text(chunk)
                 content = content[4096:]
 
-        if result.is_file and result.file_path:
+        # Deliver file attachment
+        if result.file_path:
             try:
                 with open(result.file_path, "rb") as f:
                     if result.result_type == "audio_overview":
@@ -193,6 +193,8 @@ async def _process_and_deliver(orchestrator, project, message, status_callback):
                         )
             except Exception as e:
                 await message.reply_text(f"Result generated but failed to send file: {e}")
+            finally:
+                cleanup_file(result.file_path)
 
         # Report upload errors
         upload_errors = result.metadata.get("upload_errors", [])

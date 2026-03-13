@@ -179,9 +179,14 @@ class ResearcherBot:
             update, context, self.project_manager, self.adapter
         )
 
+    async def _post_shutdown(self, application: Application) -> None:
+        """Clean up resources on shutdown."""
+        logger.info("Shutting down Researcher bot, closing NotebookLM client...")
+        await self.adapter.close()
+
     def build_application(self) -> Application:
         token = os.environ["TELEGRAM_BOT_TOKEN"]
-        app = Application.builder().token(token).build()
+        app = Application.builder().token(token).post_shutdown(self._post_shutdown).build()
 
         app.add_handler(CommandHandler("start", self._handle_start))
         app.add_handler(CommandHandler("help", self._handle_start))
